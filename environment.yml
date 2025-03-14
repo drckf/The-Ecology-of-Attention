@@ -1,0 +1,62 @@
+# Machine Learning Conda Environment
+
+name: ecology-attention
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  # Core Scientific Python
+  - python=3.12
+  - numpy<2.0
+  - pandas
+  - scipy
+  - scikit-learn
+  
+  # Deep Learning
+  - pytorch
+  - torchvision
+  - torchaudio
+  
+  # Distributed Computing
+  - ray-default
+  - dask
+  
+  # Experiment Tracking
+  - mlflow
+  
+  # Visualization
+  - matplotlib
+  - seaborn
+  - plotly
+  
+  # Jupyter Environment
+  - jupyter
+  - jupyterlab
+  - ipywidgets
+  
+  # Data Processing
+  - pyarrow
+  - polars
+  
+  # Model Evaluation & Training
+  - optuna
+  
+  # API and Data Validation
+  - fastapi
+  - uvicorn
+  - pydantic
+  
+  # Utilities
+  - tqdm
+  - pytest
+  - black
+  - flake8
+  - isort
+  
+  # Install additional packages using pip
+  - pip
+  - pip:
+    - accelerate
+    - mlx==0.22.1
+    - mlx-data==0.0.2
