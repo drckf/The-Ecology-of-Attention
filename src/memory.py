@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from . import integrate
 
 
 
@@ -14,7 +15,7 @@ def squared_retrieval_error(
     return (associative_memory.forward(q) - v).pow(2).sum(dim=1).mean()
 
 
-class FullBatchMemory(nn.Module):
+class GradientDescentMemory(nn.Module):
     """
     A class for updating and storing a memory of data.
     """
@@ -62,7 +63,7 @@ class FullBatchMemory(nn.Module):
         Returns:
             A tensor of shape (L, d_v) containing the values.
         """
-        return self.J @ q
+        return q @ self.J.T
     
     def fit(
             self, 
@@ -97,50 +98,195 @@ class FullBatchMemory(nn.Module):
         return losses
 
 
-class EmpiricalCovarianceMatrix:
+class CorrelationBasedMemory(nn.Module):
     """
-    A class for updating and storing a covariance matrix.
+    A class for updating and storing a memory of data using correlation-based optimization.
     """
-    def __init__(self, n_features: int):
+    def __init__(self, d_k: int, d_v: int, L: int, device: torch.device = None):
         """
-        Initialize the covariance matrix.
+        Initialize the memory.  
 
         Args:
-            n_features: The number of features in the data.
-        """ 
-        self.L = 0
-        self.n_features = n_features
-        self.cov = torch.zeros(n_features, n_features)
-
-    def compute(self, x: torch.Tensor):
+            d_k: The dimension of the keys
+            d_v: The dimension of the values
+            L: The number of data points in the memory
+            device: Device to store tensors on (default: cpu)
         """
-        Update the covariance matrix with a batch of data.
+        super().__init__()
+        self.device = device or torch.device('cpu')
+        self.d_k = d_k
+        self.d_v = d_v
+        self.L = L
+        
+        # Initialize tensors on specified device
+        self.J = torch.zeros(d_v, d_k, device=self.device)
+        self.w = torch.zeros(L, device=self.device)
+        # Correlation matrices
+        self.Sigma_vv = torch.zeros(d_v, d_v, device=self.device)
+        self.Sigma_qv = torch.zeros(d_k, d_v, device=self.device)
+        self.Sigma_qq = torch.zeros(d_k, d_k, device=self.device)
+        # Growth rates and interaction coefficients
+        self.s = torch.zeros(L, device=self.device)
+        self.A = torch.zeros(L, L, device=self.device)
+
+    def compute_correlations(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> None:
+        """
+        Compute correlation matrices Sigma_vv, Sigma_qv, and Sigma_qq.
 
         Args:
-            x: A tensor of shape (batch_size, n_features) 
-            containing the data to update the covariance matrix with. 
+            q: queries of shape (L, d_k)
+            k: keys of shape (L, d_k)
+            v: values of shape (L, d_v)
+
+        Raises:
+            ValueError: If input tensors have incorrect shapes
+        """
+        if not (q.shape[0] == k.shape[0] == v.shape[0] == self.L):
+            raise ValueError(f"Expected batch size {self.L}, got {q.shape[0]}, {k.shape[0]}, {v.shape[0]}")
+        if not (q.shape[1] == k.shape[1] == self.d_k):
+            raise ValueError(f"Expected key dim {self.d_k}, got {q.shape[1]}, {k.shape[1]}")
+        if v.shape[1] != self.d_v:
+            raise ValueError(f"Expected value dim {self.d_v}, got {v.shape[1]}")
+
+        self.Sigma_vv = (v.T @ v) / self.L
+        self.Sigma_qv = (q.T @ v) / self.L
+        self.Sigma_qq = (q.T @ q) / self.L
+
+    def compute_ecological_params(self, k: torch.Tensor, v: torch.Tensor) -> None:
+        """
+        Compute growth rates s_l and interaction coefficients A_ll'.
+        Vectorized implementation for better efficiency.
+
+        Args:
+            k: keys of shape (L, d_k)
+            v: values of shape (L, d_v)
+        """
+        # s_l = k_l^T Sigma_qv v_l
+        self.s = torch.sum(k @ self.Sigma_qv * v, dim=1)
+        
+        # A_ll' = v_l^T v_l' k_l'^T Sigma_qq k_l
+        v_outer = v @ v.T  # (L, L)
+        k_sigma_k = k @ self.Sigma_qq @ k.T  # (L, L)
+        self.A = v_outer * k_sigma_k
+
+    def compute_optimal_weights(self) -> None:
+        """
+        Compute optimal weights as w = A^(-1) s.
+        """
+        try:
+            self.w = torch.linalg.solve(self.A, self.s)
+        except RuntimeError:
+            # Fallback if A is not invertible
+            self.w = torch.linalg.lstsq(self.A, self.s.unsqueeze(-1)).solution.squeeze()
+
+    def compute_cost(self) -> torch.Tensor:
+        """
+        Compute the cost function value:
+        C(w) = 1/2 Tr(Sigma_vv) - Tr(J Sigma_qv) + 1/2 Tr(J Sigma_qq J^T)
 
         Returns:
-            The updated covariance matrix.
+            torch.Tensor: Current value of the cost function
         """
-        self.L = x.shape[0]
-        self.cov = x.T @ x
-        self.cov /= self.L
-        return self.cov
+        term1 = 0.5 * torch.trace(self.Sigma_vv)
+        term2 = -torch.trace(self.J @ self.Sigma_qv)
+        term3 = 0.5 * torch.trace(self.J @ self.Sigma_qq @ self.J.T)
+        return term1 + term2 + term3
 
-    def update(self, x: torch.Tensor):
+    def set_memory(self, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         """
-        Update the covariance matrix with a single data point.
+        Set the memory matrix J using the provided keys and values.
 
         Args:
-            x: A tensor of shape (n_features,) containing the data to 
-            update the covariance matrix with.
+            k: keys of shape (L, d_k)
+            v: values of shape (L, d_v)
 
         Returns:
-            The updated covariance matrix.  
+            The computed memory matrix J of shape (d_v, d_k)
         """
-        self.L += 1
-        self.cov = (self.L - 1) / self.L * self.cov + x.T @ x / self.L
-        return self.cov
+        w_expanded = self.w.view(-1, 1, 1)
+        self.J = (w_expanded * v.unsqueeze(-1) * k.unsqueeze(1)).sum(dim=0)
+        return self.J
+
+    def forward(self, q: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the memory.
+
+        Args:
+            q: queries of shape (L, d_k)
+
+        Returns:
+            Retrieved values of shape (L, d_v)
+        """
+        return q @ self.J.T
+
+    def fit(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """
+        Fit the memory by computing optimal weights directly.
+
+        Args:
+            q: queries of shape (L, d_k)
+            k: keys of shape (L, d_k)
+            v: values of shape (L, d_v)
+
+        Returns:
+            torch.Tensor: Final cost value
+        """
+        self.compute_correlations(q, k, v)
+        self.compute_ecological_params(k, v)
+        self.compute_optimal_weights()
+        self.set_memory(k, v)
+        return self.compute_cost()
+
+    def fit_with_dynamics(
+            self,
+            q: torch.Tensor,
+            k: torch.Tensor,
+            v: torch.Tensor,
+            dynamics: str = 'linear',
+            t_max: float = 10.0,
+            dt: float = 0.01
+        ) -> torch.Tensor:
+        """
+        Fit using dynamical systems integration.
+
+        Args:
+            q: queries of shape (L, d_k)
+            k: keys of shape (L, d_k)
+            v: values of shape (L, d_v)
+            dynamics: One of ['linear', 'lotka_volterra', 'replicator']
+            t_max: Maximum integration time
+            dt: Integration time step
+
+        Returns:
+            torch.Tensor: Final cost value
+
+        Raises:
+            ValueError: If dynamics type is not recognized
+        """
+        self.compute_correlations(q, k, v)
+        self.compute_ecological_params(k, v)
+        
+        integrator = {
+            'linear': integrate.integrate_linear,
+            'lotka_volterra': integrate.integrate_lotka_volterra,
+            'replicator': integrate.integrate_replicator_equation
+        }.get(dynamics)
+        
+        if integrator is None:
+            raise ValueError(
+                f"Unknown dynamics '{dynamics}'. "
+                "Must be one of ['linear', 'lotka_volterra', 'replicator']"
+            )
+        
+        self.w = integrator(
+            w_0=torch.zeros_like(self.w),
+            s=self.s,
+            A=self.A,
+            t_max=t_max,
+            dt=dt
+        )
+        
+        self.set_memory(k, v)
+        return self.compute_cost()
     
     
