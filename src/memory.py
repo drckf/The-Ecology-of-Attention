@@ -252,7 +252,6 @@ class CorrelationBasedMemory(nn.Module):
             q: queries of shape (L, d_k)
             k: keys of shape (L, d_k)
             v: values of shape (L, d_v)
-            dynamics: One of ['linear', 'lotka_volterra', 'replicator']
             t_max: Maximum integration time
             dt: Integration time step
 
@@ -277,6 +276,8 @@ class CorrelationBasedMemory(nn.Module):
 class LotkaVolterraMemory(nn.Module):
     """
     A class for updating and storing a memory of data using correlation-based optimization.
+    The weights are constrained to be non-negative, and are computed using the Lotka-Volterra 
+    equation.
     """
     def __init__(self, d_k: int, d_v: int, L: int, device: torch.device = None):
         """
@@ -390,7 +391,6 @@ class LotkaVolterraMemory(nn.Module):
             q: torch.Tensor,
             k: torch.Tensor,
             v: torch.Tensor,
-            dynamics: str = 'linear',
             t_max: float = 10.0,
             dt: float = 0.01
         ) -> torch.Tensor:
@@ -401,7 +401,6 @@ class LotkaVolterraMemory(nn.Module):
             q: queries of shape (L, d_k)
             k: keys of shape (L, d_k)
             v: values of shape (L, d_v)
-            dynamics: One of ['linear', 'lotka_volterra', 'replicator']
             t_max: Maximum integration time
             dt: Integration time step
 
@@ -426,6 +425,8 @@ class LotkaVolterraMemory(nn.Module):
 class ReplicatorMemory(nn.Module):
     """
     A class for updating and storing a memory of data using correlation-based optimization.
+    The weights are constrained to be non-negative and sum to one, and are computed using the 
+    replicator equation.
     """
     def __init__(self, d_k: int, d_v: int, L: int, device: torch.device = None):
         """
@@ -539,7 +540,6 @@ class ReplicatorMemory(nn.Module):
             q: torch.Tensor,
             k: torch.Tensor,
             v: torch.Tensor,
-            dynamics: str = 'linear',
             t_max: float = 10.0,
             dt: float = 0.01
         ) -> torch.Tensor:
@@ -550,7 +550,6 @@ class ReplicatorMemory(nn.Module):
             q: queries of shape (L, d_k)
             k: keys of shape (L, d_k)
             v: values of shape (L, d_v)
-            dynamics: One of ['linear', 'lotka_volterra', 'replicator']
             t_max: Maximum integration time
             dt: Integration time step
 
