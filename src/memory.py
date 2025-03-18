@@ -3,6 +3,9 @@ import torch.nn as nn
 from . import integrate
 
 
+################################################################################
+# Gradient Descent Memory
+################################################################################
 
 def squared_retrieval_error(
          q: torch.Tensor, 
@@ -97,6 +100,10 @@ class GradientDescentMemory(nn.Module):
             optimizer.step()
         return losses
 
+
+################################################################################
+# Correlation-Based Memory
+################################################################################
 
 class BaseCorrelationMemory(nn.Module):
     """
@@ -349,6 +356,10 @@ class ReplicatorMemory(BaseCorrelationMemory):
         return self.compute_cost()
     
 
+################################################################################
+# Invade and Adjust
+################################################################################
+
 class InvadeAndAdjustMemory(BaseCorrelationMemory):
     """
     Base class for online memory updates using invade-and-adjust dynamics.
@@ -520,6 +531,10 @@ class InvadeAndAdjustReplicator(InvadeAndAdjustMemory):
             dt=dt
         )
 
+
+################################################################################
+# Greedy Invasion
+################################################################################
 
 class GreedyInvasionMemory(BaseCorrelationMemory):
     """
