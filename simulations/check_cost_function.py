@@ -31,9 +31,8 @@ for i in range(iterations):
     )
 
     correlation_memory = memory.CorrelationBasedMemory(
-        d_k=10, 
-        d_v=10, 
-        L=L
+        K=K, 
+        V=V
     )
 
     w = torch.randn(L, device=correlation_memory.device)
@@ -41,8 +40,7 @@ for i in range(iterations):
     grad_cost = gradient_descent_memory.compute_cost(Q, V)
 
     correlation_memory.w = w
-    correlation_memory.set_memory(K, V)
-    correlation_memory.compute_correlations(Q, K, V)
+    correlation_memory.compute_correlations(Q, V)
     corr_cost = correlation_memory.compute_cost()
 
     results[i, 0] = np.log(corr_cost.cpu().detach().numpy())

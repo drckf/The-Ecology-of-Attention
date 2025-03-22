@@ -26,17 +26,16 @@ gradient_descent_memory = memory.GradientDescentMemory(
 )
 
 correlation_memory = memory.CorrelationBasedMemory(
-    d_k=10, 
-    d_v=10, 
-    L=L
+    K=K, 
+    V=V
 )
 
-correlation_memory.compute_correlations(Q, K, V)
-correlation_memory.compute_ecological_params(K, V)
+correlation_memory.compute_correlations(Q, V)
+correlation_memory.compute_ecological_params()
 
 losses = gradient_descent_memory.fit(Q, V, lr=1e-6, n_steps=1000)
 
-corr_loss = correlation_memory.fit(Q, K, V, t_max=1000 * 1e-6, dt=1e-6)
+corr_loss = correlation_memory.fit(Q, V, t_max=1000 * 1e-6, dt=1e-6, store_losses=False)
 print(corr_loss)
 
 # Create a figure with 5 subplots: 3 for correlation matrices, 1 for growth rates, 1 for interaction coefficients
