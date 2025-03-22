@@ -15,7 +15,7 @@ def squared_retrieval_error(
     """
     Compute the retrieval error of the associative memory.
     """
-    return (associative_memory.forward(q) - v).pow(2).sum(dim=1).mean()
+    return 0.5 * (associative_memory.forward(q) - v).pow(2).sum(dim=1).mean()
 
 
 class GradientDescentMemory(nn.Module):
@@ -67,6 +67,13 @@ class GradientDescentMemory(nn.Module):
             A tensor of shape (L, d_v) containing the values.
         """
         return q @ self.J.T
+    
+    def compute_cost(self, q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the cost function value:
+        C(w) = 1/2 Tr(Sigma_vv) - Tr(J Sigma_qv) + 1/2 Tr(J Sigma_qq J^T)
+        """
+        return squared_retrieval_error(q, v, self)
     
     def fit(
             self, 
