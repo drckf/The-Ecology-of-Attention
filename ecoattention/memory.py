@@ -261,26 +261,31 @@ class CorrelationBasedMemory(BaseCorrelationMemory):
         self.compute_ecological_params()
 
         if store_losses:
-            losses = torch.zeros(int(t_max / dt))
+            losses = torch.zeros(int(t_max / dt) + 1)
             def store_loss(w, t):
+                self.w = w
                 losses[int(t / dt)] = self.compute_cost().item()
-        else:
-            losses = None
+            store_loss(self.w, 0)
         
-        self.w = integrate.integrate_linear(
-            w_0=torch.zeros_like(self.w),
-            s=self.s,
-            A=self.A,
-            t_max=t_max,
-            dt=dt,
-            callback=store_loss if store_losses else None
-        )
-
-        if store_losses:
+            self.w = integrate.integrate_linear(
+                w_0=torch.zeros_like(self.w),
+                s=self.s,
+                A=self.A,
+                t_max=t_max,
+                dt=dt,
+                callback=store_loss if store_losses else None
+            )
             return losses
         else:
+            self.w = integrate.integrate_linear(
+                w_0=torch.zeros_like(self.w),
+                s=self.s,
+                A=self.A,
+                t_max=t_max,
+                dt=dt
+            )
             return self.compute_cost()
-
+        
     def fit_exact(self, q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         """
         Fit by computing optimal weights directly.

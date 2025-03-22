@@ -34,9 +34,7 @@ correlation_memory.compute_correlations(Q, V)
 correlation_memory.compute_ecological_params()
 
 losses = gradient_descent_memory.fit(Q, V, lr=1e-6, n_steps=1000)
-
-corr_loss = correlation_memory.fit(Q, V, t_max=1000 * 1e-6, dt=1e-6, store_losses=False)
-print(corr_loss)
+corr_loss = correlation_memory.fit(Q, V, t_max=1000 * 1e-6, dt=1e-6, store_losses=True)
 
 # Create a figure with 5 subplots: 3 for correlation matrices, 1 for growth rates, 1 for interaction coefficients
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
@@ -80,11 +78,13 @@ axes[1, 1].set_xlabel('Token Index')
 axes[1, 1].set_ylabel('Token Index')
 
 # Plot losses from gradient descent
-axes[1, 2].plot(losses.detach().numpy())
-axes[1, 2].set_title('Gradient Descent Losses')
+axes[1, 2].plot(losses.detach().numpy(), label='Gradient Descent')
+axes[1, 2].plot(corr_loss.detach().numpy(), label='Correlation-Based')
+axes[1, 2].set_title('Loss Comparison')
 axes[1, 2].set_xlabel('Optimization Step')
 axes[1, 2].set_ylabel('Loss')
 axes[1, 2].grid(True, linestyle='--', alpha=0.7)
+axes[1, 2].legend()
 
 # Adjust spacing to prevent legend overlap
 plt.tight_layout(pad=3.0)
