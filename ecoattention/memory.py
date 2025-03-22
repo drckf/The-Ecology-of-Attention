@@ -10,51 +10,47 @@ from . import integrate
 def squared_retrieval_error(
          q: torch.Tensor, 
          v: torch.Tensor,
-         associative_memory: nn.Module
+         J: torch.Tensor
     ):
     """
-    Compute the retrieval error of the associative memory.
+    Compute the retrieval error of the associative memory with memory matrix J.
     """
-    return 0.5 * (associative_memory.forward(q) - v).pow(2).sum(dim=1).mean()
+    return 0.5 * (q @ J.T - v).pow(2).sum(dim=1).mean()
 
 
 class GradientDescentMemory(nn.Module):
     """
     A class for updating and storing a memory of data.
     """
-    def __init__(self, d_k: int, d_v: int, L: int):
+    def __init__(self, K: torch.Tensor, V: torch.Tensor):
         """
         Initialize the memory.
 
         Args:
-            d_k: The dimension of the keys.
-            d_v: The dimension of the values.
-            L: The number of data points in the memory.
+            K: The key tensor of shape (L, d_k)
+            V: The value tensor of shape (L, d_v)
         """
         super().__init__()
-        self.L = L
-        self.J = torch.zeros(d_v, d_k)
-        self.w = nn.Parameter(torch.zeros(L))
+        self.K = K
+        self.V = V
+        self.L = K.shape[0]
+        self.d_k = K.shape[1]
+        self.d_v = V.shape[1]
+        self.w = nn.Parameter(torch.zeros(self.L))
 
-    def set_memory(self, k: torch.Tensor, v: torch.Tensor):
+    @property
+    def J(self):
         """
-        Set the memory matrix J using the provided keys and values.
-
-        This is a vectorized implementation that computes J = sum_i w_i * v_i * k_i^T.
-
-        Args:
-            k: A tensor of shape (L, d_k) containing the keys
-            v: A tensor of shape (L, d_v) containing the values
-
+        Compute the memory matrix J using the current weights.
+        
+        The memory matrix J is calculated as the weighted sum of outer products
+        between value and key vectors: J = sum_i w_i * v_i * k_i^T
+        
         Returns:
-            The computed memory matrix J of shape (d_v, d_k)
+            torch.Tensor: The computed memory matrix J of shape (d_v, d_k)
         """
-        # v: (L, d_v), k: (L, d_k), w: (L,)
-        # Reshape w to (L, 1, 1) for broadcasting
         w_expanded = self.w.view(-1, 1, 1)
-        # v: (L, d_v, 1), k: (L, 1, d_k)
-        self.J = (w_expanded * v.unsqueeze(-1) * k.unsqueeze(1)).sum(dim=0)
-        return self.J
+        return (w_expanded * self.V.unsqueeze(-1) * self.K.unsqueeze(1)).sum(dim=0)
 
     def forward(self, q: torch.Tensor):
         """
@@ -66,19 +62,18 @@ class GradientDescentMemory(nn.Module):
         Returns:
             A tensor of shape (L, d_v) containing the values.
         """
-        return q @ self.J.T
+        return q @ self.J
     
     def compute_cost(self, q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         """
         Compute the cost function value:
         C(w) = 1/2 Tr(Sigma_vv) - Tr(J Sigma_qv) + 1/2 Tr(J Sigma_qq J^T)
         """
-        return squared_retrieval_error(q, v, self)
+        return squared_retrieval_error(q, v, self.J)
     
     def fit(
             self, 
             q: torch.Tensor, 
-            k: torch.Tensor, 
             v: torch.Tensor,
             lr: float = 1e-3,
             n_steps: int = 100
@@ -88,7 +83,6 @@ class GradientDescentMemory(nn.Module):
 
         Args:
             q: A tensor of shape (L, d_k) containing the queries.
-            k: A tensor of shape (L, d_k) containing the keys.
             v: A tensor of shape (L, d_v) containing the values.
             lr: Learning rate for optimization
             n_steps: Number of optimization steps
@@ -100,8 +94,7 @@ class GradientDescentMemory(nn.Module):
         losses = torch.zeros(n_steps)
         for i in range(n_steps):
             optimizer.zero_grad()
-            self.set_memory(k, v)
-            loss = squared_retrieval_error(q, v, self)
+            loss = squared_retrieval_error(q, v, self.J)
             losses[i] = loss.item()
             loss.backward()
             optimizer.step()

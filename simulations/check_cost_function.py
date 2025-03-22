@@ -26,9 +26,8 @@ for i in range(iterations):
     X, Q, K, V = generator.generate_QKV(L)
 
     gradient_descent_memory = memory.GradientDescentMemory(
-        d_k=10, 
-        d_v=10, 
-        L=L
+        K=K, 
+        V=V
     )
 
     correlation_memory = memory.CorrelationBasedMemory(
@@ -39,7 +38,6 @@ for i in range(iterations):
 
     w = torch.randn(L, device=correlation_memory.device)
     gradient_descent_memory.w.data = w
-    gradient_descent_memory.set_memory(K, V)
     grad_cost = gradient_descent_memory.compute_cost(Q, V)
 
     correlation_memory.w = w
@@ -56,7 +54,7 @@ print(results)
 # Create a scatter plot of correlation cost vs gradient descent cost
 plt.figure(figsize=(8, 8))
 plt.scatter(results[:, 0], results[:, 1], color='blue', alpha=0.7, s=80, label='Cost comparison')
-plt.plot([20, 30], [20, 30], 'k--', alpha=0.5, label='y = x')  # Diagonal dashed line
+plt.plot([10, 20], [10, 20], 'k--', alpha=0.5, label='y = x')  # Diagonal dashed line
 
 # Set equal aspect ratio to properly show y = x relationship
 plt.axis('equal')
@@ -68,9 +66,9 @@ plt.title('Comparison of Cost Functions', fontsize=14)
 plt.grid(True, alpha=0.3)
 plt.legend()
 
-# Adjust limits to ensure all points are visible with typical values between 20 and 30
-plt.xlim(19.5, 30.5)
-plt.ylim(19.5, 30.5)
+# Adjust limits to ensure all points are visible with typical values between 10 and 15
+plt.xlim(10, 20)
+plt.ylim(10, 20)
 
 plt.tight_layout()
 os.makedirs('simulations/figures', exist_ok=True)
