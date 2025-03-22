@@ -34,9 +34,10 @@ correlation_memory = memory.CorrelationBasedMemory(
 correlation_memory.compute_correlations(Q, K, V)
 correlation_memory.compute_ecological_params(K, V)
 
-losses = gradient_descent_memory.fit(Q, V, lr=1e-6, n_steps=5)
+losses = gradient_descent_memory.fit(Q, V, lr=1e-6, n_steps=1000)
 
-print(losses)
+corr_loss = correlation_memory.fit(Q, K, V, t_max=1000 * 1e-6, dt=1e-6)
+print(corr_loss)
 
 # Create a figure with 5 subplots: 3 for correlation matrices, 1 for growth rates, 1 for interaction coefficients
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
@@ -79,8 +80,19 @@ axes[1, 1].set_title('Interaction Coefficients (A)')
 axes[1, 1].set_xlabel('Token Index')
 axes[1, 1].set_ylabel('Token Index')
 
-# Hide the unused subplot
-axes[1, 2].axis('off')
+# Plot losses from gradient descent
+axes[1, 2].plot(losses.detach().numpy())
+axes[1, 2].set_title('Gradient Descent Losses')
+axes[1, 2].set_xlabel('Optimization Step')
+axes[1, 2].set_ylabel('Loss')
+axes[1, 2].grid(True, linestyle='--', alpha=0.7)
 
-plt.tight_layout()
+# Adjust spacing to prevent legend overlap
+plt.tight_layout(pad=3.0)
+plt.subplots_adjust(wspace=0.3, hspace=0.3)
+
+# Save the figure
+os.makedirs('simulations/figures', exist_ok=True)
+plt.savefig('simulations/figures/correlation_analysis.png', dpi=300, bbox_inches='tight')
+
 plt.show()
