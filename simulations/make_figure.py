@@ -21,9 +21,8 @@ generator = SyntheticDataGenerator(
 X, Q, K, V = generator.generate_QKV(L)
 
 gradient_descent_memory = memory.GradientDescentMemory(
-    d_k=10, 
-    d_v=10, 
-    L=L
+    K=K, 
+    V=V
 )
 
 correlation_memory = memory.CorrelationBasedMemory(
@@ -35,7 +34,7 @@ correlation_memory = memory.CorrelationBasedMemory(
 correlation_memory.compute_correlations(Q, K, V)
 correlation_memory.compute_ecological_params(K, V)
 
-losses = gradient_descent_memory.fit(Q, K, V, lr=1e-9, n_steps=5)
+losses = gradient_descent_memory.fit(Q, V, lr=1e-6, n_steps=5)
 
 print(losses)
 
