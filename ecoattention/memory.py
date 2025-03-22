@@ -261,12 +261,15 @@ class CorrelationBasedMemory(BaseCorrelationMemory):
         self.compute_ecological_params()
 
         if store_losses:
-            losses = torch.zeros(int(t_max / dt) + 1)
+            n_steps = int(t_max / dt) + 1
+            losses = torch.zeros(n_steps)
+            
             def store_loss(w, t):
                 self.w = w
-                losses[int(t / dt)] = self.compute_cost().item()
+                idx = min(round(t / dt), n_steps - 1)
+                losses[idx] = self.compute_cost().item()
+
             store_loss(self.w, 0)
-        
             self.w = integrate.integrate_linear(
                 w_0=torch.zeros_like(self.w),
                 s=self.s,
