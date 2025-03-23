@@ -271,7 +271,7 @@ class CorrelationBasedMemory(BaseCorrelationMemory):
 
             store_loss(self.w, 0)
             self.w = integrate.integrate_linear(
-                w_0=torch.zeros_like(self.w),
+                w_0=self.w,
                 s=self.s,
                 A=self.A,
                 t_max=t_max,
@@ -281,7 +281,7 @@ class CorrelationBasedMemory(BaseCorrelationMemory):
             return losses
         else:
             self.w = integrate.integrate_linear(
-                w_0=torch.zeros_like(self.w),
+                w_0=self.w,
                 s=self.s,
                 A=self.A,
                 t_max=t_max,
@@ -306,6 +306,10 @@ class LotkaVolterraMemory(BaseCorrelationMemory):
     """
     Correlation-based memory with non-negative weights using Lotka-Volterra dynamics.
     """
+    def _initialize_weights(self) -> torch.Tensor:
+        """Initialize weights uniformly"""
+        return torch.ones(self.L, device=self.device) / self.L
+        
     def fit(
             self,
             q: torch.Tensor,
@@ -332,7 +336,7 @@ class LotkaVolterraMemory(BaseCorrelationMemory):
 
             store_loss(self.w, 0)
             self.w = integrate.integrate_lotka_volterra(
-                w_0=torch.zeros_like(self.w),
+                w_0=self.w,
                 s=self.s,
                 A=self.A,
                 t_max=t_max,
@@ -342,8 +346,8 @@ class LotkaVolterraMemory(BaseCorrelationMemory):
             assert (self.w >= 0).all(), "Weights must be non-negative"
             return losses
         else:
-            self.w = integrate.integrate_linear(
-                w_0=torch.zeros_like(self.w),
+            self.w = integrate.integrate_lotka_volterra(
+                w_0=self.w,
                 s=self.s,
                 A=self.A,
                 t_max=t_max,
@@ -387,19 +391,19 @@ class ReplicatorMemory(BaseCorrelationMemory):
 
             store_loss(self.w, 0)
             self.w = integrate.integrate_replicator_equation(
-                w_0=torch.ones_like(self.w) / self.L,
-                    s=self.s,
-                    A=self.A,
-                    t_max=t_max,
-                    dt=dt,
-                    callback=store_loss
-                )
+                w_0=self.w,
+                s=self.s,
+                A=self.A,
+                t_max=t_max,
+                dt=dt,
+                callback=store_loss
+            )
             assert (self.w >= 0).all(), "Weights must be non-negative"
             assert torch.allclose(self.w.sum(), torch.tensor(1.0)), "Weights must sum to 1"
             return losses
         else:
-            self.w = integrate.integrate_linear(
-                w_0=torch.zeros_like(self.w),
+            self.w = integrate.integrate_replicator_equation(
+                w_0=self.w,
                 s=self.s,
                 A=self.A,
                 t_max=t_max,
