@@ -263,7 +263,7 @@ class CorrelationBasedMemory(BaseCorrelationMemory):
         if store_losses:
             n_steps = int(t_max / dt) + 1
             losses = torch.zeros(n_steps)
-            
+
             def store_loss(w, t):
                 self.w = w
                 idx = min(round(t / dt), n_steps - 1)
@@ -311,7 +311,8 @@ class LotkaVolterraMemory(BaseCorrelationMemory):
             q: torch.Tensor,
             v: torch.Tensor,
             t_max: float = 10.0,
-            dt: float = 0.01
+            dt: float = 0.01,
+            store_losses: bool = False
         ) -> torch.Tensor:
         """
         Fit using Lotka-Volterra dynamics integration.
@@ -319,17 +320,37 @@ class LotkaVolterraMemory(BaseCorrelationMemory):
         self._validate_integration_params(t_max, dt)
         self.compute_correlations(q, v)
         self.compute_ecological_params()
-        
-        self.w = integrate.integrate_lotka_volterra(
-            w_0=torch.zeros_like(self.w),
-            s=self.s,
-            A=self.A,
-            t_max=t_max,
-            dt=dt
-        )
-        
-        assert (self.w >= 0).all(), "Weights must be non-negative"
-        return self.compute_cost()
+
+        if store_losses:
+            n_steps = int(t_max / dt) + 1
+            losses = torch.zeros(n_steps)
+            
+            def store_loss(w, t):
+                self.w = w
+                idx = min(round(t / dt), n_steps - 1)
+                losses[idx] = self.compute_cost().item()
+
+            store_loss(self.w, 0)
+            self.w = integrate.integrate_lotka_volterra(
+                w_0=torch.zeros_like(self.w),
+                s=self.s,
+                A=self.A,
+                t_max=t_max,
+                dt=dt,
+                callback=store_loss if store_losses else None
+            )
+            assert (self.w >= 0).all(), "Weights must be non-negative"
+            return losses
+        else:
+            self.w = integrate.integrate_linear(
+                w_0=torch.zeros_like(self.w),
+                s=self.s,
+                A=self.A,
+                t_max=t_max,
+                dt=dt
+            )
+            assert (self.w >= 0).all(), "Weights must be non-negative"
+            return self.compute_cost()
 
 
 class ReplicatorMemory(BaseCorrelationMemory):
