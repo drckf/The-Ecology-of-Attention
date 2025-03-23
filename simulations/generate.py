@@ -1,4 +1,5 @@
 import torch
+from math import sqrt
 
 
 
@@ -65,7 +66,7 @@ class SyntheticDataGenerator:
         """
         eye = torch.eye(self.N, device=self.device)
         V = torch.randn(self.N, self.N if dim is None else dim, device=self.device)
-        self.cov = rho * eye + (1 - rho) * V @ V.T
+        self.cov = rho * eye + (1 - rho) * V @ V.T / sqrt(self.N)
     
     def generate_projections(self, sim=0):
         """
@@ -86,9 +87,9 @@ class SyntheticDataGenerator:
         Returns:
             None: Updates the instance variables W_v, W_k, and W_q in-place.
         """
-        self.W_v = torch.randn(self.D_v, self.N, device=self.device )
-        self.W_k = torch.randn(self.D_k, self.N, device=self.device)
-        self.W_q = sim * self.W_k + (1 - sim) * torch.randn(self.D_k, self.N, device=self.device)
+        self.W_v = torch.randn(self.D_v, self.N, device=self.device ) / sqrt(self.D_v)
+        self.W_k = torch.randn(self.D_k, self.N, device=self.device) / sqrt(self.D_k)
+        self.W_q = sim * self.W_k + (1 - sim) * torch.randn(self.D_k, self.N, device=self.device) / sqrt(self.D_k)
 
     @property
     def SigmaVV(self):
