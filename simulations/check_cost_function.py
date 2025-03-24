@@ -46,13 +46,10 @@ for i in range(iterations):
     results[i, 0] = np.log(corr_cost.cpu().detach().numpy())
     results[i, 1] = np.log(grad_cost.cpu().detach().numpy())
 
-
-print(results)
-
 # Create a scatter plot of correlation cost vs gradient descent cost
 plt.figure(figsize=(8, 8))
 plt.scatter(results[:, 0], results[:, 1], color='blue', alpha=0.7, s=80, label='Cost comparison')
-plt.plot([10, 20], [10, 20], 'k--', alpha=0.5, label='y = x')  # Diagonal dashed line
+plt.plot([0, 5], [0, 5], 'k--', alpha=0.5, label='y = x')  # Diagonal dashed line
 
 # Set equal aspect ratio to properly show y = x relationship
 plt.axis('equal')
@@ -65,8 +62,8 @@ plt.grid(True, alpha=0.3)
 plt.legend()
 
 # Adjust limits to ensure all points are visible with typical values between 10 and 15
-plt.xlim(10, 20)
-plt.ylim(10, 20)
+plt.xlim(0, 5)
+plt.ylim(0, 5)
 
 plt.tight_layout()
 os.makedirs('simulations/figures', exist_ok=True)
