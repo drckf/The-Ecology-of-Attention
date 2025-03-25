@@ -185,30 +185,19 @@ class BaseCorrelationMemory(nn.Module):
         """
         Compute growth rates s_l and interaction coefficients A_ll'.
         Vectorized implementation for better efficiency.
-        """
-        if self.current_L == 0:
-            self.s.zero_()
-            self.A.zero_()
-            return
-            
-        # Cache active slices for better readability and potentially better performance
-        active_slice = slice(None, self.current_L)
-        K_active = self.K[active_slice]
-        V_active = self.V[active_slice]
-        
+        """            
+        # All parameters are always active for this class
         # Compute parameters
-        k_sigma_qv = K_active @ self.Sigma_qv
-        s_active = (k_sigma_qv * V_active).sum(dim=1)
+        k_sigma_qv = self.K @ self.Sigma_qv
+        s_values = (k_sigma_qv * self.V).sum(dim=1)
         
-        # Update s with zero initialization
-        self.s.zero_()
-        self.s[active_slice] = s_active
+        # Update s
+        self.s = s_values
         
-        # Update A with zero initialization
-        self.A.zero_()
-        v_outer = V_active @ V_active.T
-        k_sigma_k = K_active @ self.Sigma_qq @ K_active.T
-        self.A[active_slice, active_slice] = v_outer * k_sigma_k
+        # Update A
+        v_outer = self.V @ self.V.T
+        k_sigma_k = self.K @ self.Sigma_qq @ self.K.T
+        self.A = v_outer * k_sigma_k
 
     def compute_cost(self) -> torch.Tensor:
         """

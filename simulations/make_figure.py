@@ -123,6 +123,8 @@ axes[1, 2].set_xlabel('Optimization Step')
 axes[1, 2].set_ylabel('Loss')
 axes[1, 2].set_ylim(0, 0.6)
 axes[1, 2].grid(True, linestyle='--', alpha=0.7)
+# Reduce number of x-ticks to prevent overlapping
+axes[1, 2].xaxis.set_major_locator(plt.MaxNLocator(5))
 # Place legend inside the plot with padding
 axes[1, 2].legend(loc='upper right', bbox_to_anchor=(0.98, 0.98), frameon=True, framealpha=1)
 
