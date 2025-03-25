@@ -78,10 +78,10 @@ plt.yticks(fontsize=12)
 plt.tight_layout()
 
 # Create figures directory if it doesn't exist
-os.makedirs('figures', exist_ok=True)
+os.makedirs('simulations/   figures', exist_ok=True)
 
 # Save the figure in high resolution
-plt.savefig('figures/online_memory_cost_comparison.png', dpi=300, bbox_inches='tight')
+plt.savefig('simulations/figures/online_memory_cost_comparison.png', dpi=300, bbox_inches='tight')
 
 # Display the figure
 plt.show()
