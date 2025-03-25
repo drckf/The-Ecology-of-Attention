@@ -64,9 +64,11 @@ class SyntheticDataGenerator:
         Returns:
             None: Updates the instance variable cov in-place.
         """
+        # this covariance will generate vectors with approximately unit norm
+        dim = dim or self.N
         eye = torch.eye(self.N, device=self.device)
-        V = torch.randn(self.N, self.N if dim is None else dim, device=self.device)
-        self.cov = rho * eye + (1 - rho) * V @ V.T / sqrt(self.N)
+        V = torch.randn(self.N, dim, device=self.device) / sqrt(dim)
+        self.cov = (rho * eye + (1 - rho) * V @ V.T) / self.N
     
     def generate_projections(self, sim=0):
         """

@@ -5,6 +5,7 @@ import ecoattention.memory as memory
 from generate import SyntheticDataGenerator
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 # Set the random seed for reproducibility
 torch.manual_seed(42)
 L = 100
@@ -14,7 +15,7 @@ generator = SyntheticDataGenerator(
     D_v=10, 
     D_k=10, 
     rho=0.5, 
-    sim=0.5, 
+    sim=0.9, 
     device='cpu'
 )
 
@@ -49,11 +50,12 @@ lotka_volterra_memory.compute_ecological_params()
 replicator_memory.compute_correlations(Q, V)
 replicator_memory.compute_ecological_params()
 
-fit_steps = 100000
-losses = gradient_descent_memory.fit(Q, V, lr=1e-6, n_steps=fit_steps)
-corr_loss = correlation_memory.fit(Q, V, t_max=fit_steps * 1e-6, dt=1e-6, store_losses=True)
-lv_loss = lotka_volterra_memory.fit(Q, V, t_max=fit_steps * 1e-6, dt=1e-6, store_losses=True)
-rep_loss = replicator_memory.fit(Q, V, t_max=fit_steps * 1e-6, dt=1e-6, store_losses=True)
+fit_steps = 200000
+step_size = 1e-3
+losses = gradient_descent_memory.fit(Q, V, lr=step_size, n_steps=fit_steps)
+corr_loss = correlation_memory.fit(Q, V, t_max=fit_steps * step_size, dt=step_size, store_losses=True)
+lv_loss = lotka_volterra_memory.fit(Q, V, t_max=fit_steps * step_size, dt=step_size, store_losses=True)
+rep_loss = replicator_memory.fit(Q, V, t_max=fit_steps * step_size, dt=step_size, store_losses=True)
 
 # Create figure with GridSpec
 fig = plt.figure(figsize=(18, 12))
@@ -103,14 +105,9 @@ heatmap4 = axes[1, 1].imshow(correlation_memory.A.detach().numpy(), cmap='coolwa
 divider = make_axes_locatable(axes[1, 1])
 cax = divider.append_axes("right", size="5%", pad=0.05)
 cbar = fig.colorbar(heatmap4, cax=cax, label='Interaction Strength')
-# Get the order of magnitude for scaling
-max_val = np.abs(correlation_memory.A.detach().numpy()).max()
-scale_factor = int(np.floor(np.log10(max_val)))
-if scale_factor != 0:
-    # Scale the colorbar values
-    cbar.set_ticks(cbar.get_ticks())
-    cbar.set_ticklabels([f'{x/10**scale_factor:g}' for x in cbar.get_ticks()])
-    cbar.ax.set_title(f'×10$^{scale_factor}$', pad=10)
+# Format the colorbar with decimal values
+cbar.formatter = plt.FormatStrFormatter('%.2f')
+cbar.update_ticks()
 
 axes[1, 1].set_title('E. Interaction Coefficients (A)')
 axes[1, 1].set_xlabel('Token Index')
@@ -124,7 +121,7 @@ axes[1, 2].plot(losses.detach().numpy(), label='Gradient Descent', linestyle='--
 axes[1, 2].set_title('F. Loss Comparison')
 axes[1, 2].set_xlabel('Optimization Step')
 axes[1, 2].set_ylabel('Loss')
-axes[1, 2].set_ylim(0, 50)
+axes[1, 2].set_ylim(0, 0.6)
 axes[1, 2].grid(True, linestyle='--', alpha=0.7)
 # Place legend inside the plot with padding
 axes[1, 2].legend(loc='upper right', bbox_to_anchor=(0.98, 0.98), frameon=True, framealpha=1)

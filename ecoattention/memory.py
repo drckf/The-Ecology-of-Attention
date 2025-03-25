@@ -186,14 +186,29 @@ class BaseCorrelationMemory(nn.Module):
         Compute growth rates s_l and interaction coefficients A_ll'.
         Vectorized implementation for better efficiency.
         """
-        # s_l = k_l^T Sigma_qv v_l
-        k_sigma_qv = self.K @ self.Sigma_qv  # (L, d_v)
-        self.s = (k_sigma_qv * self.V).sum(dim=1)
+        if self.current_L == 0:
+            self.s.zero_()
+            self.A.zero_()
+            return
+            
+        # Cache active slices for better readability and potentially better performance
+        active_slice = slice(None, self.current_L)
+        K_active = self.K[active_slice]
+        V_active = self.V[active_slice]
         
-        # A_ll' = v_l^T v_l' k_l'^T Sigma_qq k_l
-        v_outer = self.V @ self.V.T  # (L, L)
-        k_sigma_k = self.K @ self.Sigma_qq @ self.K.T  # (L, L)
-        self.A = v_outer * k_sigma_k
+        # Compute parameters
+        k_sigma_qv = K_active @ self.Sigma_qv
+        s_active = (k_sigma_qv * V_active).sum(dim=1)
+        
+        # Update s with zero initialization
+        self.s.zero_()
+        self.s[active_slice] = s_active
+        
+        # Update A with zero initialization
+        self.A.zero_()
+        v_outer = V_active @ V_active.T
+        k_sigma_k = K_active @ self.Sigma_qq @ K_active.T
+        self.A[active_slice, active_slice] = v_outer * k_sigma_k
 
     def compute_cost(self) -> torch.Tensor:
         """
@@ -418,16 +433,31 @@ class ReplicatorMemory(BaseCorrelationMemory):
 # Invade and Adjust
 ################################################################################
 
-class InvadeAndAdjustMemory(BaseCorrelationMemory):
+class InvadeAndAdjustMemory(nn.Module):
     """
     Base class for online memory updates using invade-and-adjust dynamics.
     """
     def __init__(self, d_k: int, d_v: int, L: int, device: torch.device = None):
-        super().__init__(d_k, d_v, L, device)
+        super().__init__()
+        self.device = device or torch.device('cpu')
+        self.d_k = d_k
+        self.d_v = d_v
+        self.L = L
+
         # Keep track of number of tokens seen
         self.current_L = 0
+
         # Initialize correlation matrices
         self.reset_correlations()
+        
+        # Initialize tensors on specified device
+        self.w = self._initialize_weights()
+        self.K = torch.zeros(L, d_k, device=self.device)
+        self.V = torch.zeros(L, d_v, device=self.device)
+        
+        # Growth rates and interaction coefficients
+        self.s = torch.zeros(self.L, device=self.device)
+        self.A = torch.zeros(self.L, self.L, device=self.device)
 
     def reset_correlations(self):
         """Reset correlation matrices to zeros"""
@@ -435,6 +465,17 @@ class InvadeAndAdjustMemory(BaseCorrelationMemory):
         self.Sigma_qv = torch.zeros(self.d_k, self.d_v, device=self.device)
         self.Sigma_qq = torch.zeros(self.d_k, self.d_k, device=self.device)
 
+    def _initialize_weights(self) -> torch.Tensor:
+        """Initialize weights (can be overridden by subclasses)"""
+        return torch.zeros(self.L, device=self.device)
+    
+    def update_length(self) -> None:
+        """Update the length of the memory"""
+        if self.current_L < self.L:
+            self.current_L += 1
+        else:
+            raise ValueError("Memory is full")
+    
     def update_correlations(self, q: torch.Tensor, v: torch.Tensor) -> None:
         """
         Update correlation matrices with a new token.
@@ -443,13 +484,92 @@ class InvadeAndAdjustMemory(BaseCorrelationMemory):
             q: query vector of shape (d_k,)
             v: value vector of shape (d_v,)
         """
-        self.current_L += 1
         l = self.current_L
-        
-        # Update correlation matrices using online updates
         self.Sigma_vv = (l-1)/l * self.Sigma_vv + (v.outer(v)) / l
         self.Sigma_qv = (l-1)/l * self.Sigma_qv + (q.outer(v)) / l
         self.Sigma_qq = (l-1)/l * self.Sigma_qq + (q.outer(q)) / l
+
+    def update_memory(self, k: torch.Tensor, v: torch.Tensor) -> None:
+        """
+        Update the memory matrix with a new token.
+        """
+        self.K[self.current_L-1] = k
+        self.V[self.current_L-1] = v    
+
+    @property
+    def J(self):
+        """
+        Compute the memory matrix J using the current weights.
+        
+        The memory matrix J is calculated as the weighted sum of outer products
+        between value and key vectors: J = sum_i w_i * v_i * k_i^T
+        
+        Returns:
+            torch.Tensor: The computed memory matrix J of shape (d_v, d_k)
+        """
+        # Only use the first current_L entries which are non-zero
+        if self.current_L == 0:
+            return torch.zeros(self.d_v, self.d_k, device=self.device)
+        
+        w_active = self.w[:self.current_L].view(-1, 1, 1)
+        V_active = self.V[:self.current_L]
+        K_active = self.K[:self.current_L]
+        
+        return (w_active * V_active.unsqueeze(-1) * K_active.unsqueeze(1)).sum(dim=0)
+    
+    def compute_cost(self) -> torch.Tensor:
+        """
+        Compute the cost function value:
+        C(w) = 1/2 Tr(Sigma_vv) - Tr(J Sigma_qv) + 1/2 Tr(J Sigma_qq J^T)
+
+        Returns:
+            torch.Tensor: Current value of the cost function
+        """
+        term1 = 0.5 * torch.trace(self.Sigma_vv)
+        term2 = -torch.trace(self.J @ self.Sigma_qv)
+        term3 = 0.5 * torch.trace(self.J @ self.Sigma_qq @ self.J.T)
+        return term1 + term2 + term3
+
+    def forward(self, q: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the memory.
+
+        Args:
+            q: queries of shape (d_k,)
+
+        Returns:
+            Retrieved values of shape (d_v,)
+        """
+        return self.J @ q
+
+    def compute_ecological_params(self) -> None:
+        """
+        Compute growth rates s_l and interaction coefficients A_ll'.
+        Vectorized implementation for better efficiency.
+        """
+        if self.current_L == 0:
+            self.s.zero_()
+            self.A.zero_()
+            return
+            
+        # Cache active slices for better readability and potentially better performance
+        active_slice = slice(None, self.current_L)
+        K_active = self.K[active_slice]
+        V_active = self.V[active_slice]
+        
+        # Compute parameters
+        k_sigma_qv = K_active @ self.Sigma_qv
+        s_active = (k_sigma_qv * V_active).sum(dim=1)
+        
+        # Update s with zero initialization
+        self.s.zero_()
+        self.s[active_slice] = s_active
+        
+        # Update A with zero initialization
+        self.A.zero_()
+        v_outer = V_active @ V_active.T
+        k_sigma_k = K_active @ self.Sigma_qq @ K_active.T
+        self.A[active_slice, active_slice] = v_outer * k_sigma_k
 
     def compute_invasion_criterion(self, q: torch.Tensor, v: torch.Tensor) -> bool:
         """
@@ -457,9 +577,23 @@ class InvadeAndAdjustMemory(BaseCorrelationMemory):
         """
         raise NotImplementedError("Subclasses must implement invasion criterion")
 
+    def _validate_integration_params(self, t_max: float, dt: float) -> None:
+        """Validate integration parameters"""
+        if t_max <= 0:
+            raise ValueError("t_max must be positive")
+        if dt <= 0 or dt >= t_max:
+            raise ValueError("dt must be positive and less than t_max")
+
+    def _adjust_weights(self, t_max: float, dt: float) -> None:
+        """
+        Adjust weights using dynamics. Must be implemented by subclasses.
+        """
+        raise NotImplementedError("Subclasses must implement weight adjustment")
+    
     def update(
             self, 
             q: torch.Tensor, 
+            k: torch.Tensor,
             v: torch.Tensor, 
             t_max: float = 10.0, 
             dt: float = 0.01,
@@ -470,6 +604,7 @@ class InvadeAndAdjustMemory(BaseCorrelationMemory):
 
         Args:
             q: query vector of shape (d_k,)
+            k: key vector of shape (d_k,)
             v: value vector of shape (d_v,)
             t_max: Maximum integration time if invasion occurs
             dt: Integration time step if invasion occurs
@@ -478,39 +613,19 @@ class InvadeAndAdjustMemory(BaseCorrelationMemory):
         Returns:
             torch.Tensor: Current cost value
         """
-        # Update correlation matrices
+        self.update_length()
         self.update_correlations(q, v)
+        self.update_memory(k, v)
+        self.compute_ecological_params()
         
-        # Compute ecological parameters for current token
-        k_l = q.unsqueeze(0)  # Add batch dimension
-        v_l = v.unsqueeze(0)
-        self.compute_ecological_params(k_l, v_l)
-        
-        # Check invasion criterion
         can_invade = self.compute_invasion_criterion(q, v)
-        
         if can_invade:
-            # Initialize new weight and adjust all weights
             self.w[self.current_L-1] = epsilon
             self._adjust_weights(t_max, dt)
         else:
-            # Set new weight to zero, keep others unchanged
             self.w[self.current_L-1] = 0.0
-            
-        # Update memory matrix
-        k = torch.zeros(self.L, self.d_k, device=self.device)
-        v = torch.zeros(self.L, self.d_v, device=self.device)
-        k[:self.current_L] = k_l
-        v[:self.current_L] = v_l
-        self.set_memory(k, v)
-        
+                 
         return self.compute_cost()
-
-    def _adjust_weights(self, t_max: float, dt: float) -> None:
-        """
-        Adjust weights using dynamics. Must be implemented by subclasses.
-        """
-        raise NotImplementedError("Subclasses must implement weight adjustment")
 
 
 class InvadeAndAdjustLotkaVolterra(InvadeAndAdjustMemory):
@@ -523,19 +638,18 @@ class InvadeAndAdjustLotkaVolterra(InvadeAndAdjustMemory):
         s_l - sum_{l'} A_{l,l'} w_{l'} <= 0
         """
         # s_l for new token
-        s_l = torch.sum(q @ self.Sigma_qv * v)
+        s_l = self.s[self.current_L-1]
         
         # sum_{l'} A_{l,l'} w_{l'} for existing tokens
         A_sum = 0.0
         if self.current_L > 1:
-            v_term = v @ v[:self.current_L-1].T
-            k_term = q @ self.Sigma_qq @ q[:self.current_L-1].T
-            A_sum = torch.sum(v_term * k_term * self.w[:self.current_L-1])
+            A_sum = torch.sum(self.A[self.current_L-1, :self.current_L-1] * self.w[:self.current_L-1])
             
         return (s_l - A_sum) > 0
 
     def _adjust_weights(self, t_max: float, dt: float) -> None:
         """Adjust weights using Lotka-Volterra dynamics"""
+        self._validate_integration_params(t_max, dt)
         self.w[:self.current_L] = integrate.integrate_lotka_volterra(
             w_0=self.w[:self.current_L],
             s=self.s[:self.current_L],
@@ -558,15 +672,13 @@ class InvadeAndAdjustReplicator(InvadeAndAdjustMemory):
             return True
             
         # s_l for new token
-        s_l = torch.sum(q @ self.Sigma_qv * v)
+        s_l = self.s[self.current_L-1]
         
         # mean of existing s values
         s_mean = torch.mean(self.s[:self.current_L-1])
         
         # sum_{l'} A_{l,l'} w_{l'} for existing tokens
-        v_term = v @ v[:self.current_L-1].T
-        k_term = q @ self.Sigma_qq @ q[:self.current_L-1].T
-        A_sum = torch.sum(v_term * k_term * self.w[:self.current_L-1])
+        A_sum = torch.sum(self.A[self.current_L-1, :self.current_L-1] * self.w[:self.current_L-1])
         
         # mean of sum_{l'} A_{l',l''} w_{l''} for existing tokens
         A_mean = torch.mean(
@@ -581,37 +693,37 @@ class InvadeAndAdjustReplicator(InvadeAndAdjustMemory):
 
     def _adjust_weights(self, t_max: float, dt: float) -> None:
         """Adjust weights using replicator dynamics"""
-        self.w[:self.current_L] = integrate.integrate_replicator_equation(
-            w_0=self.w[:self.current_L],
-            s=self.s[:self.current_L],
-            A=self.A[:self.current_L, :self.current_L],
-            t_max=t_max,
-            dt=dt
-        )
+        self._validate_integration_params(t_max, dt)
+        if self.current_L == 1:
+            self.w[0] = 1.0
+        else:
+            self.w[:self.current_L] = integrate.integrate_replicator_equation(
+                w_0=self.w[:self.current_L],
+                s=self.s[:self.current_L],
+                A=self.A[:self.current_L, :self.current_L],
+                t_max=t_max,
+                dt=dt
+            )
 
 
 ################################################################################
 # Greedy Invasion
 ################################################################################
 
-class GreedyInvasionMemory(BaseCorrelationMemory):
+class GreedyInvasionMemory(nn.Module):
     """
     Online memory updates using greedy invasion with either fixed forget gate
     or learned gates using replicator dynamics.
     
     The memory matrix is updated as:
-    J_l = omega_f * J_{l-1} + omega_i * v_l * k_l^T
+    J_l = (1 - omega_i) * J_{l-1} + omega_i * v_l * k_l^T
     
-    where omega_f and omega_i are either:
-    1. Fixed: omega_f is a hyperparameter, omega_i is computed from Lotka-Volterra
-    2. Learned: omega_f + omega_i = 1, computed using replicator dynamics
+    where omega_i is computed using replicator dynamics or derived from a fixed forget rate.
     """
     def __init__(
             self, 
             d_k: int, 
             d_v: int, 
-            L: int, 
-            omega_f: float = None,
             device: torch.device = None
         ):
         """
@@ -620,13 +732,12 @@ class GreedyInvasionMemory(BaseCorrelationMemory):
         Args:
             d_k: The dimension of the keys
             d_v: The dimension of the values
-            L: The number of data points in the memory
-            omega_f: Fixed forget gate value (if None, gates are learned)
             device: Device to store tensors on (default: cpu)
         """
-        super().__init__(d_k, d_v, L, device)
-        self.fixed_forget = omega_f is not None
-        self.omega_f = omega_f
+        super().__init__()
+        self.device = device or torch.device('cpu')
+        self.d_k = d_k
+        self.d_v = d_v
         self.current_L = 0
         self.reset()
 
@@ -641,11 +752,17 @@ class GreedyInvasionMemory(BaseCorrelationMemory):
         self.Sigma_qv = torch.zeros(self.d_k, self.d_v, device=self.device)
         self.Sigma_qq = torch.zeros(self.d_k, self.d_k, device=self.device)
 
-    def update_correlations(self, q: torch.Tensor, v: torch.Tensor) -> None:
-        """Update correlation matrices with new token"""
+    def update_correlations(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> None:
+        """
+        Update correlation matrices with new token
+        
+        Args:
+            q: query vector of shape (d_k,)
+            k: key vector of shape (d_k,)
+            v: value vector of shape (d_v,)
+        """
         self.current_L += 1
         l = self.current_L
-        
         self.Sigma_vv = (l-1)/l * self.Sigma_vv + (v.outer(v)) / l
         self.Sigma_qv = (l-1)/l * self.Sigma_qv + (q.outer(v)) / l
         self.Sigma_qq = (l-1)/l * self.Sigma_qq + (q.outer(q)) / l
@@ -653,6 +770,7 @@ class GreedyInvasionMemory(BaseCorrelationMemory):
     def compute_ecological_params(
             self, 
             q: torch.Tensor, 
+            k: torch.Tensor, 
             v: torch.Tensor
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -660,6 +778,7 @@ class GreedyInvasionMemory(BaseCorrelationMemory):
 
         Args:
             q: query vector of shape (d_k,)
+            k: key vector of shape (d_k,)
             v: value vector of shape (d_v,)
 
         Returns:
@@ -667,26 +786,14 @@ class GreedyInvasionMemory(BaseCorrelationMemory):
         """
         # Growth rates
         s_J = torch.trace(self.J @ self.Sigma_qv)
-        s_l = torch.sum(q @ self.Sigma_qv * v)
+        s_l = torch.sum(k @ self.Sigma_qv * v)
         
         # Interaction terms
         A_JJ = torch.trace(self.J @ self.Sigma_qq @ self.J.T)
-        A_ll = torch.sum(v.outer(v) * (q @ self.Sigma_qq @ q.T))
-        A_Jl = torch.sum(v @ self.J @ self.Sigma_qq @ q)
+        A_ll = (k @ self.Sigma_qq @ k.T) * (v @ v)
+        A_Jl = torch.sum(v @ self.J @ self.Sigma_qq @ k)
         
         return s_J, s_l, A_JJ, A_ll, A_Jl
-
-    def compute_fixed_gate_weights(
-            self,
-            s_l: torch.Tensor,
-            A_Jl: torch.Tensor,
-            A_ll: torch.Tensor
-        ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute gate weights with fixed forget gate using Lotka-Volterra solution.
-        """
-        omega_i = torch.clamp((s_l - self.omega_f * A_Jl) / A_ll, min=0)
-        return self.omega_f, omega_i
 
     def compute_learned_gate_weights(
             self,
@@ -701,44 +808,135 @@ class GreedyInvasionMemory(BaseCorrelationMemory):
         """
         numerator = s_l - s_J + A_JJ - A_Jl
         denominator = A_ll + A_JJ - 2 * A_Jl
-        
-        # Clamp to [0,1] for valid gates
         omega_i = torch.clamp(numerator / denominator, min=0, max=1)
         omega_f = 1 - omega_i
-        
         return omega_f, omega_i
+    
+    def compute_cost(self) -> torch.Tensor:
+        """
+        Compute the cost function value:
+        C(w) = 1/2 Tr(Sigma_vv) - Tr(J Sigma_qv) + 1/2 Tr(J Sigma_qq J^T)
 
-    def update(self, q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        Returns:
+            torch.Tensor: Current value of the cost function
+        """
+        term1 = 0.5 * torch.trace(self.Sigma_vv)
+        term2 = -torch.trace(self.J @ self.Sigma_qv)
+        term3 = 0.5 * torch.trace(self.J @ self.Sigma_qq @ self.J.T)
+        return term1 + term2 + term3
+
+    def update(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         """
         Update memory with new token using greedy invasion.
 
         Args:
             q: query vector of shape (d_k,)
+            k: key vector of shape (d_k,)
             v: value vector of shape (d_v,)
 
         Returns:
             torch.Tensor: Current cost value
         """
-        # Update correlation matrices
-        self.update_correlations(q, v)
+        self.update_correlations(q, k, v)
+        s_J, s_l, A_JJ, A_ll, A_Jl = self.compute_ecological_params(q, k, v)
         
-        # Compute ecological parameters
-        s_J, s_l, A_JJ, A_ll, A_Jl = self.compute_ecological_params(q, v)
-        
-        # Compute gate weights
-        if self.fixed_forget:
-            omega_f, omega_i = self.compute_fixed_gate_weights(s_l, A_Jl, A_ll)
+        # If this is the first token, set omega_i = 1 and omega_f = 0
+        if self.current_L == 1:
+            omega_f, omega_i = 0.0, 1.0
         else:
             omega_f, omega_i = self.compute_learned_gate_weights(
                 s_J, s_l, A_JJ, A_ll, A_Jl
             )
             
-        # Update memory matrix
-        self.J = omega_f * self.J + omega_i * v.outer(q)
+        self.J = omega_f * self.J + omega_i * v.outer(k)
+        return self.compute_cost()
+    
+
+class LinearAttentionMemory(nn.Module):
+    """
+    Linear attention memory that assigns equal weight (1/L) to each token.
+    This implements a simple running average of outer products.
+    """
+    
+    def __init__(
+        self,
+        d_k: int,
+        d_v: int,
+        device: str = "cuda",
+    ):
+        """
+        Initialize the linear attention memory.
         
-        # Compute cost
-        cost = (0.5 * torch.trace(self.Sigma_vv) 
-                - torch.trace(self.J @ self.Sigma_qv)
-                + 0.5 * torch.trace(self.J @ self.Sigma_qq @ self.J.T))
+        Args:
+            d_k: Dimension of key/query vectors
+            d_v: Dimension of value vectors
+            device: Device to use for computations
+        """
+        super().__init__()
+        self.device = device or torch.device('cpu')
+        self.d_k = d_k
+        self.d_v = d_v
+        self.current_L = 0
+        self.reset()
+
+    def reset(self):
+        """Reset memory state"""
+        self.J = torch.zeros(self.d_v, self.d_k, device=self.device)
+        self.reset_correlations()
+
+    def reset_correlations(self):
+        """Reset correlation matrices"""
+        self.Sigma_vv = torch.zeros(self.d_v, self.d_v, device=self.device)
+        self.Sigma_qv = torch.zeros(self.d_k, self.d_v, device=self.device)
+        self.Sigma_qq = torch.zeros(self.d_k, self.d_k, device=self.device)
+
+    def update_correlations(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> None:
+        """
+        Update correlation matrices with new token
         
-        return cost
+        Args:
+            q: query vector of shape (d_k,)
+            k: key vector of shape (d_k,)
+            v: value vector of shape (d_v,)
+        """
+        self.current_L += 1
+        l = self.current_L
+        self.Sigma_vv = (l-1)/l * self.Sigma_vv + (v.outer(v)) / l
+        self.Sigma_qv = (l-1)/l * self.Sigma_qv + (q.outer(v)) / l
+        self.Sigma_qq = (l-1)/l * self.Sigma_qq + (q.outer(q)) / l
+        
+    def compute_cost(self) -> torch.Tensor:
+        """
+        Compute the cost function value:
+        C(w) = 1/2 Tr(Sigma_vv) - Tr(J Sigma_qv) + 1/2 Tr(J Sigma_qq J^T)
+
+        Returns:
+            torch.Tensor: Current value of the cost function
+        """
+        term1 = 0.5 * torch.trace(self.Sigma_vv)
+        term2 = -torch.trace(self.J @ self.Sigma_qv)
+        term3 = 0.5 * torch.trace(self.J @ self.Sigma_qq @ self.J.T)
+        return term1 + term2 + term3
+    
+    def update(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """
+        Update memory with new token using linear attention (equal weighting).
+        
+        Args:
+            q: query vector of shape (d_k,)
+            k: key vector of shape (d_k,)
+            v: value vector of shape (d_v,)
+            
+        Returns:
+            torch.Tensor: Current cost value
+        """
+        self.update_correlations(k, q, v)
+        
+        # Linear attention: weight = 1/L for all tokens
+        omega_i = 1.0 / self.current_L
+        omega_f = 1.0 - omega_i
+        
+        # Update memory
+        self.J = omega_f * self.J + omega_i * v.outer(k)
+        
+        return self.compute_cost()
