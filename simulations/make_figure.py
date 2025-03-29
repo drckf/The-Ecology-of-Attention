@@ -26,36 +26,18 @@ gradient_descent_memory = memory.GradientDescentMemory(
     V=V
 )
 
-correlation_memory = memory.CorrelationBasedMemory(
-    K=K, 
-    V=V
-)
-
 lotka_volterra_memory = memory.LotkaVolterraMemory(
     K=K, 
     V=V
 )
 
-replicator_memory = memory.ReplicatorMemory(
-    K=K, 
-    V=V
-)
-
-correlation_memory.compute_correlations(Q, V)
-correlation_memory.compute_ecological_params()
-
 lotka_volterra_memory.compute_correlations(Q, V)
 lotka_volterra_memory.compute_ecological_params()
 
-replicator_memory.compute_correlations(Q, V)
-replicator_memory.compute_ecological_params()
-
 fit_steps = 200000
-step_size = 1e-3
+step_size = 1e-2
 losses = gradient_descent_memory.fit(Q, V, lr=step_size, n_steps=fit_steps)
-corr_loss = correlation_memory.fit(Q, V, t_max=fit_steps * step_size, dt=step_size, store_losses=True)
 lv_loss = lotka_volterra_memory.fit(Q, V, t_max=fit_steps * step_size, dt=step_size, store_losses=True)
-rep_loss = replicator_memory.fit(Q, V, t_max=fit_steps * step_size, dt=step_size, store_losses=True)
 
 # Create figure with GridSpec
 fig = plt.figure(figsize=(18, 12))
@@ -63,7 +45,7 @@ gs = fig.add_gridspec(2, 3, hspace=0.5, wspace=0.5)  # Increased spacing between
 axes = gs.subplots()
 
 # Plot Sigma_vv
-heatmap1 = axes[0, 0].imshow(correlation_memory.Sigma_vv.detach().numpy(), cmap='viridis', aspect='equal')
+heatmap1 = axes[0, 0].imshow(lotka_volterra_memory.Sigma_vv.detach().numpy(), cmap='viridis', aspect='equal')
 divider = make_axes_locatable(axes[0, 0])
 cax = divider.append_axes("right", size="5%", pad=0.05)
 fig.colorbar(heatmap1, cax=cax, label='Correlation')
@@ -72,7 +54,7 @@ axes[0, 0].set_xlabel('Value Dimension')
 axes[0, 0].set_ylabel('Value Dimension')
 
 # Plot Sigma_qq
-heatmap2 = axes[0, 1].imshow(correlation_memory.Sigma_qq.detach().numpy(), cmap='viridis', aspect='equal')
+heatmap2 = axes[0, 1].imshow(lotka_volterra_memory.Sigma_qq.detach().numpy(), cmap='viridis', aspect='equal')
 divider = make_axes_locatable(axes[0, 1])
 cax = divider.append_axes("right", size="5%", pad=0.05)
 fig.colorbar(heatmap2, cax=cax, label='Correlation')
@@ -81,7 +63,7 @@ axes[0, 1].set_xlabel('Query Dimension')
 axes[0, 1].set_ylabel('Query Dimension')
 
 # Plot Sigma_qv
-heatmap3 = axes[0, 2].imshow(correlation_memory.Sigma_qv.detach().numpy(), cmap='viridis', aspect='equal')
+heatmap3 = axes[0, 2].imshow(lotka_volterra_memory.Sigma_qv.detach().numpy(), cmap='viridis', aspect='equal')
 divider = make_axes_locatable(axes[0, 2])
 cax = divider.append_axes("right", size="5%", pad=0.05)
 fig.colorbar(heatmap3, cax=cax, label='Correlation')
@@ -90,7 +72,7 @@ axes[0, 2].set_xlabel('Value Dimension')
 axes[0, 2].set_ylabel('Query Dimension')
 
 # Plot growth rates (s)
-s_values = correlation_memory.s.detach().numpy()
+s_values = lotka_volterra_memory.s.detach().numpy()
 axes[1, 0].bar(np.arange(len(s_values)), s_values)
 axes[1, 0].set_title('D. Growth Rates (s)')
 axes[1, 0].set_xlabel('Token Index')
@@ -98,9 +80,9 @@ axes[1, 0].set_ylabel('Growth Rate')
 axes[1, 0].grid(axis='y', linestyle='--', alpha=0.7)
 
 # Plot interaction coefficients (A)
-heatmap4 = axes[1, 1].imshow(correlation_memory.A.detach().numpy(), cmap='coolwarm', 
-                            vmin=-np.abs(correlation_memory.A.detach().numpy()).max(), 
-                            vmax=np.abs(correlation_memory.A.detach().numpy()).max(),
+heatmap4 = axes[1, 1].imshow(lotka_volterra_memory.A.detach().numpy(), cmap='coolwarm', 
+                            vmin=-np.abs(lotka_volterra_memory.A.detach().numpy()).max(), 
+                            vmax=np.abs(lotka_volterra_memory.A.detach().numpy()).max(),
                             aspect='equal')
 divider = make_axes_locatable(axes[1, 1])
 cax = divider.append_axes("right", size="5%", pad=0.05)
@@ -114,14 +96,12 @@ axes[1, 1].set_xlabel('Token Index')
 axes[1, 1].set_ylabel('Token Index')
 
 # Plot losses from gradient descent
-axes[1, 2].plot(corr_loss.detach().numpy(), label='Unconstrained')
 axes[1, 2].plot(lv_loss.detach().numpy(), label='Lotka-Volterra')
-axes[1, 2].plot(rep_loss.detach().numpy(), label='Replicator')
-axes[1, 2].plot(losses.detach().numpy(), label='Gradient Descent', linestyle='--')
+axes[1, 2].plot(losses.detach().numpy(), label='Gradient Descent',  linestyle='--')
 axes[1, 2].set_title('F. Loss Comparison')
 axes[1, 2].set_xlabel('Optimization Step')
 axes[1, 2].set_ylabel('Loss')
-axes[1, 2].set_ylim(0, 0.6)
+axes[1, 2].set_ylim(0, 0.5)
 axes[1, 2].grid(True, linestyle='--', alpha=0.7)
 # Reduce number of x-ticks to prevent overlapping
 axes[1, 2].xaxis.set_major_locator(plt.MaxNLocator(5))

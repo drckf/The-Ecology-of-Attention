@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from . import integrate
+from .expo import ExponentiatedSGD
 
 
 ################################################################################
@@ -37,7 +38,7 @@ class GradientDescentMemory(nn.Module):
         self.L = K.shape[0]
         self.d_k = K.shape[1]
         self.d_v = V.shape[1]
-        self.w = nn.Parameter(torch.zeros(self.L, device=self.device))
+        self.w = nn.Parameter(torch.ones(self.L, device=self.device) / self.L)
 
     @property
     def J(self):
@@ -91,7 +92,7 @@ class GradientDescentMemory(nn.Module):
         Returns:
             torch.Tensor: Vector of loss values at each optimization step
         """
-        optimizer = torch.optim.SGD(self.parameters(), lr=lr)
+        optimizer = ExponentiatedSGD(self.parameters(), lr=lr)
         losses = torch.zeros(n_steps)
         for i in range(n_steps):
             optimizer.zero_grad()
