@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from . import integrate
+from .expo import ExponentiatedSGD
 
 
 ################################################################################
@@ -37,7 +38,7 @@ class GradientDescentMemory(nn.Module):
         self.L = K.shape[0]
         self.d_k = K.shape[1]
         self.d_v = V.shape[1]
-        self.w = nn.Parameter(torch.zeros(self.L, device=self.device))
+        self.w = nn.Parameter(torch.ones(self.L, device=self.device) / self.L)
 
     @property
     def J(self):
@@ -91,7 +92,7 @@ class GradientDescentMemory(nn.Module):
         Returns:
             torch.Tensor: Vector of loss values at each optimization step
         """
-        optimizer = torch.optim.SGD(self.parameters(), lr=lr)
+        optimizer = ExponentiatedSGD(self.parameters(), lr=lr)
         losses = torch.zeros(n_steps)
         for i in range(n_steps):
             optimizer.zero_grad()
@@ -243,68 +244,6 @@ class BaseCorrelationMemory(nn.Module):
         Fit using dynamical systems integration. Must be implemented by subclasses.
         """
         raise NotImplementedError("Subclasses must implement fit method")
-
-
-class CorrelationBasedMemory(BaseCorrelationMemory):
-    """
-    Unconstrained correlation-based memory using linear dynamics.
-    """
-    def fit(
-            self,
-            q: torch.Tensor,
-            v: torch.Tensor,
-            t_max: float = 10.0,
-            dt: float = 0.01,
-            store_losses: bool = False
-        ) -> torch.Tensor:
-        """
-        Fit using linear dynamics integration.
-        """
-        self._validate_integration_params(t_max, dt)
-        self.compute_correlations(q, v)
-        self.compute_ecological_params()
-
-        if store_losses:
-            n_steps = int(t_max / dt) + 1
-            losses = torch.zeros(n_steps)
-
-            def store_loss(w, t):
-                self.w = w
-                idx = min(round(t / dt), n_steps - 1)
-                losses[idx] = self.compute_cost().item()
-
-            store_loss(self.w, 0)
-            self.w = integrate.integrate_linear(
-                w_0=self.w,
-                s=self.s,
-                A=self.A,
-                t_max=t_max,
-                dt=dt,
-                callback=store_loss
-            )
-            return losses
-        else:
-            self.w = integrate.integrate_linear(
-                w_0=self.w,
-                s=self.s,
-                A=self.A,
-                t_max=t_max,
-                dt=dt
-            )
-            return self.compute_cost()
-        
-    def fit_exact(self, q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        """
-        Fit by computing optimal weights directly.
-        """
-        self.compute_correlations(q, v)
-        self.compute_ecological_params()
-        try:
-            self.w = torch.linalg.solve(self.A, self.s)
-        except RuntimeError:
-            self.w = torch.linalg.lstsq(self.A, self.s.unsqueeze(-1)).solution.squeeze()
-        return self.compute_cost()
-
 
 class LotkaVolterraMemory(BaseCorrelationMemory):
     """
@@ -600,7 +539,7 @@ class InvadeAndAdjustMemory(nn.Module):
             epsilon: Small initial weight for invasion
 
         Returns:
-            torch.Tensor: Current cost value
+            tuple: Current cost value and boolean indicating if invasion occurred
         """
         self.update_length()
         self.update_correlations(q, v)
@@ -614,7 +553,7 @@ class InvadeAndAdjustMemory(nn.Module):
         else:
             self.w[self.current_L-1] = 0.0
                  
-        return self.compute_cost()
+        return self.compute_cost(), can_invade
 
 
 class InvadeAndAdjustLotkaVolterra(InvadeAndAdjustMemory):
@@ -701,28 +640,14 @@ class InvadeAndAdjustReplicator(InvadeAndAdjustMemory):
 
 class GreedyInvasionMemory(nn.Module):
     """
-    Online memory updates using greedy invasion with either fixed forget gate
-    or learned gates using replicator dynamics.
+    Online memory updates using greedy invasion based on Lotka-Volterra dynamics.
     
     The memory matrix is updated as:
-    J_l = (1 - omega_i) * J_{l-1} + omega_i * v_l * k_l^T
+    J_l = omega_f * J_{l-1} + omega_i * v_l * k_l^T
     
-    where omega_i is computed using replicator dynamics or derived from a fixed forget rate.
+    where omega_i and omega_f are computed from ecological parameters.
     """
-    def __init__(
-            self, 
-            d_k: int, 
-            d_v: int, 
-            device: torch.device = None
-        ):
-        """
-        Initialize the memory.
-
-        Args:
-            d_k: The dimension of the keys
-            d_v: The dimension of the values
-            device: Device to store tensors on (default: cpu)
-        """
+    def __init__(self, d_k: int, d_v: int, device: torch.device = None):
         super().__init__()
         self.device = device or torch.device('cpu')
         self.d_k = d_k
@@ -742,72 +667,44 @@ class GreedyInvasionMemory(nn.Module):
         self.Sigma_qq = torch.zeros(self.d_k, self.d_k, device=self.device)
 
     def update_correlations(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> None:
-        """
-        Update correlation matrices with new token
-        
-        Args:
-            q: query vector of shape (d_k,)
-            k: key vector of shape (d_k,)
-            v: value vector of shape (d_v,)
-        """
+        """Update correlation matrices with new token"""
         self.current_L += 1
         l = self.current_L
-        self.Sigma_vv = (l-1)/l * self.Sigma_vv + (v.outer(v)) / l
-        self.Sigma_qv = (l-1)/l * self.Sigma_qv + (q.outer(v)) / l
-        self.Sigma_qq = (l-1)/l * self.Sigma_qq + (q.outer(q)) / l
+        self.Sigma_vv = (l-1)/l * self.Sigma_vv + v.outer(v) / l
+        self.Sigma_qv = (l-1)/l * self.Sigma_qv + q.outer(v) / l
+        self.Sigma_qq = (l-1)/l * self.Sigma_qq + q.outer(q) / l
 
-    def compute_ecological_params(
-            self, 
-            q: torch.Tensor, 
-            k: torch.Tensor, 
-            v: torch.Tensor
-        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Compute ecological parameters for greedy invasion.
-
-        Args:
-            q: query vector of shape (d_k,)
-            k: key vector of shape (d_k,)
-            v: value vector of shape (d_v,)
-
-        Returns:
-            Tuple of (s_J, s_l, A_JJ, A_ll, A_Jl)
-        """
-        # Growth rates
+    def compute_ecological_params(self, q, k, v):
+        """Compute s_J, s_l, A_JJ, A_ll, A_Jl"""
         s_J = torch.trace(self.J @ self.Sigma_qv)
-        s_l = torch.sum(k @ self.Sigma_qv * v)
-        
-        # Interaction terms
+        s_l = (k @ self.Sigma_qv @ v).item()
         A_JJ = torch.trace(self.J @ self.Sigma_qq @ self.J.T)
-        A_ll = (k @ self.Sigma_qq @ k.T) * (v @ v)
-        A_Jl = torch.sum(v @ self.J @ self.Sigma_qq @ k)
-        
+        A_ll = (v @ v) * (k @ self.Sigma_qq @ k)
+        A_Jl = (v @ self.J @ self.Sigma_qq @ k).item()
         return s_J, s_l, A_JJ, A_ll, A_Jl
 
-    def compute_learned_gate_weights(
-            self,
-            s_J: torch.Tensor,
-            s_l: torch.Tensor,
-            A_JJ: torch.Tensor,
-            A_ll: torch.Tensor,
-            A_Jl: torch.Tensor
-        ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute gate weights using replicator dynamics solution.
-        """
-        numerator = s_l - s_J + A_JJ - A_Jl
-        denominator = A_ll + A_JJ - 2 * A_Jl
-        omega_i = torch.clamp(numerator / denominator, min=0, max=1)
-        omega_f = 1 - omega_i
+    def compute_lv_gates(self, s_J, s_l, A_JJ, A_ll, A_Jl):
+        """Lotka-Volterra equilibrium with nonnegativity constraints"""
+        denom = A_JJ * A_ll - A_Jl**2
+        omega_f = (A_ll * s_J - A_Jl * s_l) / denom
+        omega_i = (A_JJ * s_l - A_Jl * s_J) / denom
+
+        # Apply ecological invasion logic
+        if omega_i <= 0:
+            omega_f = s_J / A_JJ
+            omega_i = 0.0
+        elif omega_f <= 0:
+            omega_i = s_l / A_ll
+            omega_f = 0.0
+
         return omega_f, omega_i
     
     def compute_cost(self) -> torch.Tensor:
         """
-        Compute the cost function value:
+        Compute the cost function:
         C(w) = 1/2 Tr(Sigma_vv) - Tr(J Sigma_qv) + 1/2 Tr(J Sigma_qq J^T)
-
         Returns:
-            torch.Tensor: Current value of the cost function
+            torch.Tensor: Cost value.
         """
         term1 = 0.5 * torch.trace(self.Sigma_vv)
         term2 = -torch.trace(self.J @ self.Sigma_qv)
@@ -815,30 +712,27 @@ class GreedyInvasionMemory(nn.Module):
         return term1 + term2 + term3
 
     def update(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        """
-        Update memory with new token using greedy invasion.
-
-        Args:
-            q: query vector of shape (d_k,)
-            k: key vector of shape (d_k,)
-            v: value vector of shape (d_v,)
-
-        Returns:
-            torch.Tensor: Current cost value
-        """
+        """Update memory with new token using ecological greedy invasion"""
         self.update_correlations(q, k, v)
-        s_J, s_l, A_JJ, A_ll, A_Jl = self.compute_ecological_params(q, k, v)
-        
-        # If this is the first token, set omega_i = 1 and omega_f = 0
+
+        # First token: directly add
         if self.current_L == 1:
-            omega_f, omega_i = 0.0, 1.0
-        else:
-            omega_f, omega_i = self.compute_learned_gate_weights(
-                s_J, s_l, A_JJ, A_ll, A_Jl
-            )
-            
+            self.J = v.outer(k)
+            return self.compute_cost(), True
+
+        # Compute approximate invasion margin
+        s_J, s_l, A_JJ, A_ll, A_Jl = self.compute_ecological_params(q, k, v)
+        margin = s_l - A_Jl * (s_J / A_JJ)
+
+        if margin <= 0:
+            # New token cannot invade → memory unchanged
+            return self.compute_cost(), False
+
+        # New token can invade → compute gated update
+        omega_f, omega_i = self.compute_lv_gates(s_J, s_l, A_JJ, A_ll, A_Jl)
         self.J = omega_f * self.J + omega_i * v.outer(k)
-        return self.compute_cost()
+
+        return self.compute_cost(), True
     
 
 class LinearAttentionMemory(nn.Module):
@@ -928,4 +822,4 @@ class LinearAttentionMemory(nn.Module):
         # Update memory
         self.J = omega_f * self.J + omega_i * v.outer(k)
         
-        return self.compute_cost()
+        return self.compute_cost(), True

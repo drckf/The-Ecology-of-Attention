@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 # Set the random seed for reproducibility
 torch.manual_seed(42)
-iterations = 1000
+iterations = 100
 
 results = np.zeros((iterations, 2))
 
@@ -30,12 +30,12 @@ for i in range(iterations):
         V=V
     )
 
-    correlation_memory = memory.CorrelationBasedMemory(
+    correlation_memory = memory.LotkaVolterraMemory(
         K=K, 
         V=V
     )
 
-    w = torch.randn(L, device=correlation_memory.device)
+    w = torch.rand(L, device=correlation_memory.device)
     gradient_descent_memory.w.data = w
     grad_cost = gradient_descent_memory.compute_cost(Q, V)
 
